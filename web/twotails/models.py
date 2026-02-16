@@ -35,16 +35,52 @@ class Supplier(models.Model):
         verbose_name = "Поставщик"
         verbose_name_plural = "Поставщики"
 
+        permissions = [
+            ("confirm_supply", "Может подтверждать поставку"),
+            ("cancel_supply", "Может отменять поставку"),
+            ("change_order_item_status", "Может менять статус поставки"), 
+            ("can_edit_delivery_items", "Может редактировать состав поставки"),
+            ("view_own_deliveries", "Может просматривать свои поставки"),
+            ("view_own_products", "Может просматривать свои товары"),
+            ("view_own_orders", "Может просматривать заказы с его товарами"),
+            ("view_own_sales_report", "Может просматривать отчёты по своим продажам"),
+        ]
+class Supply(models.Model):
+    supplier = models.ForeignKey('Supplier', verbose_name="Поставщик", on_delete=models.CASCADE, related_name="supplies")
+    date = models.DateField("Дата поставки", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Поставка"
+        verbose_name_plural = "Поставки"
+
+class SupplyItem(models.Model):
+    supply = models.ForeignKey(Supply, verbose_name="Поставка", on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey('Product', verbose_name="Товар", on_delete=models.CASCADE )
+    quantity = models.PositiveIntegerField("Количество")
+
+    class Meta:
+        verbose_name = "Элемент поставки"
+        verbose_name_plural = "Элементы поставки"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.product.last_delivery_quantity = self.quantity
+        self.product.current_quantity += self.quantity
+        self.product.save()
+
 class Delivery(models.Model):
     STATUS_CHOICES = [
-        ('pending', 'В ожидании'),
-        ('in_progress', 'В процессе'),
-        ('received', 'Получен'),
-        ('canceled', 'Отменён'),
+        ('pending', 'Ожидает подтверждения'),
+        ('confirmed', 'Подтверждена'),
+        ("rejected", "Отклонена"),
+        ('assembling', 'Сборка'),
+        ('in_progress', 'В пути'),
+        ('received', 'Исполнена'),
+        ('canceled', 'Отменена'),
     ]
     status = models.CharField("Статус", max_length=11, choices=STATUS_CHOICES, default='pending')
     delivery_date = models.DateTimeField("Дата доставки", auto_now_add=True)
-    supplier = models.ForeignKey(Supplier, verbose_name="Поставщик", on_delete=models.CASCADE)
+    supplier = models.ForeignKey(Supplier, verbose_name="Поставщик",null=True, on_delete=models.SET_NULL)
 
     class Meta:
         verbose_name = "Доставка"
@@ -61,12 +97,16 @@ class Category(models.Model):
 class Product(models.Model):
     name = models.CharField("Название товара", max_length=120)
     description = models.TextField("Описание")
+    last_delivery_quantity = models.PositiveIntegerField("Количество в последней поставке", default=0)
+    current_quantity = models.PositiveIntegerField("Текущее количество", default=0)
     purchase_price = models.IntegerField("Закупочная цена")
     sale_price = models.IntegerField("Цена продажи")
     manufacturer = models.CharField("Производитель", max_length=100)
     supplier = models.ForeignKey(Supplier, verbose_name="Поставщик", on_delete=models.SET_NULL, null=True)
     category = models.ForeignKey(Category, verbose_name="Категория", on_delete=models.SET_NULL, null=True)
     promotions = models.ManyToManyField('Promotion', verbose_name="Акции", through='ProductPromotion')
+    has_discount = models.BooleanField("Скидка", default=False)
+    discount_percent = models.PositiveIntegerField("Процент скидки", default=0)
 
     class Meta:
         verbose_name = "Товар"
