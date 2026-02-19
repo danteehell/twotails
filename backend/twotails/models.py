@@ -1,5 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
+from datetime import timedelta
+
 
 class Role(models.Model):
     name = models.CharField("Название роли", max_length=20, unique=True)
@@ -16,6 +19,12 @@ class User(AbstractUser):
     class Meta:
         verbose_name = "Пользователь"
         verbose_name_plural = "Пользователи"
+
+    def account_age(self):
+        time_on_site = timezone.now() - self.date_joined
+        days_on_site = time_on_site.days
+        years, days = divmod(days_on_site, 365)
+        return f'{years} лет и {days} дней'
 
 class Address(models.Model):
     user = models.ForeignKey(User, verbose_name="Пользователь", on_delete=models.CASCADE)
@@ -46,7 +55,7 @@ class Supplier(models.Model):
             ("view_own_sales_report", "Может просматривать отчёты по своим продажам"),
         ]
 class Supply(models.Model):
-    supplier = models.ForeignKey('Supplier', verbose_name="Поставщик", on_delete=models.CASCADE, related_name="supplies")
+    supplier = models.ForeignKey(Supplier, verbose_name="Поставщик", on_delete=models.CASCADE, related_name="supplies")
     date = models.DateField("Дата поставки", auto_now_add=True)
 
     class Meta:
@@ -79,7 +88,7 @@ class Delivery(models.Model):
         ('canceled', 'Отменена'),
     ]
     status = models.CharField("Статус", max_length=11, choices=STATUS_CHOICES, default='pending')
-    delivery_date = models.DateTimeField("Дата доставки", auto_now_add=True)
+    delivery_date = models.DateTimeField("Дата и время доставки", auto_now_add=True)
     supplier = models.ForeignKey(Supplier, verbose_name="Поставщик",null=True, on_delete=models.SET_NULL)
 
     class Meta:
@@ -97,10 +106,12 @@ class Category(models.Model):
 class Product(models.Model):
     name = models.CharField("Название товара", max_length=120)
     description = models.TextField("Описание")
+    manufactured_by = models.DateField("Дата изготовления", default=timezone.now)
+    expiration_days = models.PositiveIntegerField("Срок годности", default=30)
     last_delivery_quantity = models.PositiveIntegerField("Количество в последней поставке", default=0)
     current_quantity = models.PositiveIntegerField("Текущее количество", default=0)
     purchase_price = models.IntegerField("Закупочная цена")
-    sale_price = models.IntegerField("Цена продажи")
+    sale_price = models.PositiveIntegerField("Цена продажи")
     manufacturer = models.CharField("Производитель", max_length=100)
     supplier = models.ForeignKey(Supplier, verbose_name="Поставщик", on_delete=models.SET_NULL, null=True)
     category = models.ForeignKey(Category, verbose_name="Категория", on_delete=models.SET_NULL, null=True)
@@ -111,6 +122,26 @@ class Product(models.Model):
     class Meta:
         verbose_name = "Товар"
         verbose_name_plural = "Товары"
+
+    def is_usable(self):
+        return self.manufactured_by + timedelta(days = self.expiration_days) >= timezone.now()
+    def discount_percentage(self):
+        category = self.category
+        while category.parent and category.parent.name != 'Питание':
+            category = category.parent
+        expiration_date = self.manufactured_by + timedelta(days=self.expiration_days)
+        days_left = (expiration_date - timezone.now().date()).days
+        if days_left > 100:
+            self.discount_percent = 5
+        elif days_left > 80:
+            self.discount_percent = 10
+        elif days_left > 60:
+            self.discount_percent = 15
+        elif days_left > 30:
+            self.discount_percent = 30
+        else:
+            self.discount_percent = 70
+        return self.discount_percent
 
 class DeliveryItem(models.Model):
     delivery = models.ForeignKey(Delivery, verbose_name="Доставка", on_delete=models.CASCADE)
@@ -123,7 +154,7 @@ class DeliveryItem(models.Model):
 
 class Cart(models.Model):
     user = models.ForeignKey(User, verbose_name="Пользователь", on_delete=models.CASCADE)
-    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    created_at = models.DateTimeField("Создан", default=timezone.now)
     updated_at = models.DateTimeField("Обновлён", auto_now=True)
     STATUS_CHOICES = [
         ('active', 'Активная'),
@@ -136,10 +167,11 @@ class Cart(models.Model):
         verbose_name = "Корзина"
         verbose_name_plural = "Корзины"
 
+
 class CartItem(models.Model):
     cart = models.ForeignKey(Cart, verbose_name="Корзина", on_delete=models.CASCADE)
     product = models.ForeignKey(Product, verbose_name="Товар", on_delete=models.CASCADE)
-    quantity = models.IntegerField("Количество")
+    quantity = models.PositiveIntegerField("Количество")
 
     class Meta:
         verbose_name = "Элемент корзины"
@@ -147,7 +179,7 @@ class CartItem(models.Model):
 
 class Order(models.Model):
     user = models.ForeignKey(User, verbose_name="Пользователь", on_delete=models.SET_NULL, null=True)
-    created_at = models.DateTimeField("Создан", auto_now_add=True)
+    created_at = models.DateTimeField("Создан", default=timezone.now)
     STATUS_CHOICES = [
         ('created', 'Создан'),
         ('paid', 'Оплачен'),
@@ -164,7 +196,7 @@ class Order(models.Model):
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, verbose_name="Заказ", on_delete=models.SET_NULL, null=True)
     product = models.ForeignKey(Product, verbose_name="Товар", on_delete=models.SET_NULL, null=True)
-    quantity = models.IntegerField("Количество")
+    quantity = models.PositiveIntegerField("Количество")
     price_at_purchase = models.FloatField("Цена на момент покупки")
 
     class Meta:
@@ -174,7 +206,7 @@ class OrderItem(models.Model):
 class Promotion(models.Model):
     name = models.CharField("Название акции", max_length=50)
     description = models.TextField("Описание")
-    discount_percent = models.IntegerField("Процент скидки")
+    discount_percent = models.PositiveIntegerField("Процент скидки")
     start_date = models.DateField("Дата начала")
     end_date = models.DateField("Дата окончания")
     is_active = models.BooleanField("Активна")
@@ -182,6 +214,7 @@ class Promotion(models.Model):
     class Meta:
         verbose_name = "Акция"
         verbose_name_plural = "Акции"
+    
 
 class ProductPromotion(models.Model):
     product = models.ForeignKey(Product, verbose_name="Товар", on_delete=models.CASCADE)
